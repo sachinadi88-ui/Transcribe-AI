@@ -23,6 +23,30 @@ import { motion, AnimatePresence } from 'motion/react';
 // Recommended model for audio transcription - Using the latest stable flash alias
 const MODEL_NAME = "gemini-flash-latest";
 
+/**
+ * Thoroughly removes all timestamps, time ranges, and time indicators
+ * from the transcribed text (e.g., [00:12], (0:30), 00:00:15 - 00:00:30, [Speaker 1 00:05]).
+ */
+function removeTimestamps(text: string): string {
+  return text
+    // 1. Remove bracketed or parenthesized timestamps or ranges: [00:00], [00:00 - 00:15], (0:12), (01:23:45)
+    .replace(/[\[\(]\s*\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:\s*[-–—~to]\s*\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?)?\s*[\]\)]/gi, "")
+    // 2. Remove line-leading timestamps like "00:00: ", "01:23 - ", "0:15 "
+    .replace(/^\s*\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:\s*[-–—~to]\s*\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?)?\s*[:\-–—]?\s*/gm, "")
+    // 3. Remove inline timestamps like " 00:15:23 " or " 02:45 "
+    .replace(/(?<=\s|^)\d{1,2}:[0-5]\d(?::[0-5]\d)?(?:\.\d+)?(?=\s|[:\-–—]|$)/gm, "")
+    // 4. Clean up dangling spaces before punctuation (e.g. "word : " -> "word: ")
+    .replace(/\s+([,.:;?!])/g, "$1")
+    // 5. Clean up multiple spaces
+    .replace(/[ \t]+/g, " ")
+    // 6. Clean up empty lines and normalize paragraphs
+    .split("\n")
+    .map(line => line.trim())
+    .filter((line, i, arr) => line.length > 0 || (i > 0 && arr[i-1].length > 0))
+    .join("\n")
+    .trim();
+}
+
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -185,9 +209,12 @@ export default function App() {
         if (file.name.endsWith('.m4a')) mimeType = 'audio/mp4';
       }
 
-      // 3. Request transcription
+      // 3. Request transcription with strict timestamp suppression
       const response = await ai.models.generateContent({
         model: MODEL_NAME,
+        config: {
+          systemInstruction: "You are an expert audio transcriptionist. Transcribe the audio verbatim into continuous, clear text paragraphs. You must NEVER output timestamps, time codes, or duration markers (such as [00:00], 0:15, or time intervals) anywhere in your response. Output only the plain transcribed spoken words.",
+        },
         contents: [
           {
             parts: [
@@ -198,24 +225,29 @@ export default function App() {
                 },
               },
               {
-                text: "Provide a verbatim transcription of this audio. Do not include timestamps.",
+                text: "Transcribe the audio verbatim into clean text. Strictly DO NOT include any timestamps, time markers, or time ranges.",
               },
             ],
           },
         ],
       });
 
-      if (!response.text) {
+      const rawText = response.text || "";
+      const cleanTranscript = removeTimestamps(rawText);
+
+      if (!cleanTranscript) {
         throw new Error("The AI was unable to generate a transcript for this file. It might be silent or containing unsupported content.");
       }
 
-      setTranscription(response.text);
+      setTranscription(cleanTranscript);
     } catch (err: any) {
       console.error("Transcription error:", err);
       let errorMsg = "An error occurred during transcription.";
       
       if (err.message?.includes("API_KEY_INVALID")) {
         errorMsg = "Invalid API Key. Please check your project settings.";
+      } else if (err.message?.includes("503") || err.message?.includes("high demand") || err.message?.includes("UNAVAILABLE")) {
+        errorMsg = "Google's AI model is temporarily experiencing high server demand (503). Please wait a few moments and try again.";
       } else if (err.message?.includes("Model")) {
         errorMsg = `The selected model (${MODEL_NAME}) is currently unavailable or unsupported for this task.`;
       } else if (err.message?.includes("Too Many Requests")) {
