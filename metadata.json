@@ -1,0 +1,6 @@
+{
+  "name": "AudioTranscribe AI",
+  "description": "A high-precision audio transcription app powered by Gemini AI. Upload your audio files and get instant, accurate transcripts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
