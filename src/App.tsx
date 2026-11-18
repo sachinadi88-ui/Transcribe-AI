@@ -4,7 +4,6 @@
  */
 
 import { useState, useRef, useCallback, DragEvent, ChangeEvent } from 'react';
-import { GoogleGenAI } from "@google/genai";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
 import { 
   Upload, 
@@ -20,8 +19,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-// Recommended model for audio transcription - Using the latest stable flash alias
-const MODEL_NAME = "gemini-flash-latest";
+// Recommended model for audio transcription
+const MODEL_NAME = "gemini-3.5-transcribe";
 
 /**
  * Thoroughly removes all timestamps, time ranges, and time indicators
@@ -198,9 +197,6 @@ export default function App() {
 
       const base64Data = await base64Promise;
 
-      // 2. Initialize Gemini API
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      
       // Map common mime types if browser reports them oddly
       let mimeType = file.type;
       if (!mimeType) {
@@ -209,30 +205,26 @@ export default function App() {
         if (file.name.endsWith('.m4a')) mimeType = 'audio/mp4';
       }
 
-      // 3. Request transcription with strict timestamp suppression
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        config: {
-          systemInstruction: "You are an expert audio transcriptionist. Transcribe the audio verbatim into continuous, clear text paragraphs. You must NEVER output timestamps, time codes, or duration markers (such as [00:00], 0:15, or time intervals) anywhere in your response. Output only the plain transcribed spoken words.",
+      // 2. Call server-side transcription API
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-        contents: [
-          {
-            parts: [
-              {
-                inlineData: {
-                  mimeType: mimeType || 'audio/mpeg',
-                  data: base64Data,
-                },
-              },
-              {
-                text: "Transcribe the audio verbatim into clean text. Strictly DO NOT include any timestamps, time markers, or time ranges.",
-              },
-            ],
-          },
-        ],
+        body: JSON.stringify({
+          base64Data,
+          mimeType: mimeType || 'audio/mpeg',
+          fileName: file.name,
+        }),
       });
 
-      const rawText = response.text || "";
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.error || `Server error (${response.status})`);
+      }
+
+      const rawText = data.text || '';
       const cleanTranscript = removeTimestamps(rawText);
 
       if (!cleanTranscript) {
@@ -248,7 +240,7 @@ export default function App() {
         errorMsg = "Invalid API Key. Please check your project settings.";
       } else if (err.message?.includes("503") || err.message?.includes("high demand") || err.message?.includes("UNAVAILABLE")) {
         errorMsg = "Google's AI model is temporarily experiencing high server demand (503). Please wait a few moments and try again.";
-      } else if (err.message?.includes("Model")) {
+      } else if (err.message?.includes("NOT_FOUND") || err.message?.includes("404")) {
         errorMsg = `The selected model (${MODEL_NAME}) is currently unavailable or unsupported for this task.`;
       } else if (err.message?.includes("Too Many Requests")) {
         errorMsg = "Rate limit exceeded. Please wait a moment and try again.";
@@ -292,7 +284,7 @@ export default function App() {
         <div className="flex items-center gap-4 bg-white px-4 py-2 rounded-full border border-slate-200 shadow-sm self-center md:self-auto">
           <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-            TRANSCRIPTION ENGINE: {MODEL_NAME === 'gemini-flash-latest' ? 'Gemini Flash' : MODEL_NAME}
+            TRANSCRIPTION ENGINE: {MODEL_NAME === 'gemini-3.5-transcribe' ? 'Gemini 3.5 Transcribe' : MODEL_NAME}
           </div>
         </div>
       </header>
@@ -466,7 +458,7 @@ export default function App() {
                 <span className="w-1 h-1 rounded-full bg-slate-300"></span>
                 <span>{formatFileSize(file?.size || 0)}</span>
               </div>
-              <p className="text-[10px] uppercase tracking-widest font-bold text-slate-400">Processed by Gemini Flash</p>
+              <p className="text-[10px] uppercase tracking-widest font-bold text-slate-400">Processed by Gemini 3.5 Transcribe</p>
             </div>
           </motion.div>
         )}

@@ -1,6 +1,8 @@
 {
-  "name": "AudioTranscribe AI",
+  "name": "Audio to Text- Sachin Adi",
   "description": "A high-precision audio transcription app powered by Gemini AI. Upload your audio files and get instant, accurate transcripts.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
