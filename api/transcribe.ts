@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import type { Request, Response } from 'express';
 
 export function removeTimestamps(text: string): string {
@@ -21,7 +21,15 @@ export function removeTimestamps(text: string): string {
     .trim();
 }
 
-const MODELS_TO_TRY = ['gemini-3.5-transcribe', 'gemini-4-hydrogen'];
+const MODEL_ATTEMPTS: Array<{
+  model: string;
+  apiVersion?: string;
+  supportsSystemInstruction?: boolean;
+  useLowThinking?: boolean;
+}> = [
+  { model: 'gemini-3.5-transcribe', apiVersion: 'v1beta', supportsSystemInstruction: false },
+  { model: 'gemini-4-hydrogen', supportsSystemInstruction: true, useLowThinking: true },
+];
 
 function isTransientOrNotFoundError(err: any): boolean {
   const msg = String(err?.message || '');
@@ -56,15 +64,6 @@ export async function handleTranscription(req: Request, res: Response) {
       });
     }
 
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-
     let finalMimeType = mimeType;
     if (!finalMimeType) {
       if (fileName?.endsWith('.mp3')) finalMimeType = 'audio/mpeg';
@@ -76,14 +75,30 @@ export async function handleTranscription(req: Request, res: Response) {
     let lastError: any = null;
     let transcriptionText = '';
 
-    for (const model of MODELS_TO_TRY) {
+    for (const attempt of MODEL_ATTEMPTS) {
       try {
-        const response = await ai.models.generateContent({
-          model,
-          config: {
-            systemInstruction:
-              'You are an expert audio transcriptionist. Transcribe the audio verbatim into continuous, clear text paragraphs. You must NEVER output timestamps, time codes, or duration markers (such as [00:00], 0:15, or time intervals) anywhere in your response. Output only the plain transcribed spoken words.',
+        const ai = new GoogleGenAI({
+          apiKey,
+          ...(attempt.apiVersion ? { apiVersion: attempt.apiVersion } : {}),
+          httpOptions: {
+            headers: {
+              'User-Agent': 'aistudio-build',
+            },
           },
+        });
+
+        const config: Record<string, any> = {};
+        if (attempt.supportsSystemInstruction) {
+          config.systemInstruction =
+            'You are an expert audio transcriptionist. Transcribe the audio verbatim into continuous, clear text paragraphs. You must NEVER output timestamps, time codes, or duration markers (such as [00:00], 0:15, or time intervals) anywhere in your response. Output only the plain transcribed spoken words.';
+        }
+        if (attempt.useLowThinking) {
+          config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+        }
+
+        const response = await ai.models.generateContent({
+          model: attempt.model,
+          ...(Object.keys(config).length > 0 ? { config } : {}),
           contents: {
             parts: [
               {
@@ -105,7 +120,6 @@ export async function handleTranscription(req: Request, res: Response) {
         }
       } catch (err: any) {
         lastError = err;
-        console.warn(`Model ${model} transcription attempt failed:`, err?.message || err);
         if (isTransientOrNotFoundError(err)) {
           continue;
         }
